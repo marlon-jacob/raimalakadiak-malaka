@@ -1816,12 +1816,13 @@ textarea:focus {
     <button class="secondary-button" id="spp3Button" type="button">
       Materi SPP 3
     </button>
+    <button class="secondary-button" id="malakaButton" type="button">Materi Malaka</button>
   </div>
-  <div id="sppMaterialList">
+  <div id="sppMaterialList" aria-live="polite">
   <div class="empty-state">
     <h3>Pilih kategori Materi SPP</h3>
     <p>
-      Pilih Materi SPP 1, SPP 2, atau SPP 3 untuk melihat materi
+      Pilih Materi SPP 1, SPP 2, SPP 3, atau Materi Malaka untuk melihat materi
       yang tersedia.
     </p>
   </div>
@@ -8643,60 +8644,102 @@ async function discoverSpp3Materials(existingMaterials) {
   }
 }
 
-async function renderSppMaterials(category) {
-  const list = document.querySelector("#sppMaterialList");
+// Materi Malaka: admin uploads documents to materi-malaka/ on GitHub.
+let selectedSppCategory = null;
+let sppRenderVersion = 0;
 
-  const categoryNames = {
-    spp1: "Materi SPP 1",
-    spp2: "Materi SPP 2",
-    spp3: "Materi SPP 3"
-  };
-
-  let materials = [...(sppMaterials[category] || [])];
-
-  if (!list) return;
-
-  if (category === "spp3") {
-    list.innerHTML = '<div class="empty-state"><h3>' + categoryNames[category] + '</h3><p>Memeriksa materi tambahan SPP 3...</p></div>';
-    materials = [...materials, ...(await discoverSpp3Materials(materials))];
-  }
-
-  if (materials.length === 0) {
-    list.innerHTML = '<div class="empty-state"><h3>' + categoryNames[category] + '</h3><p>Materi untuk kategori ini belum tersedia.</p></div>';
-    return;
-  }
-
-  list.innerHTML = materials
-    .map(
-      (material) => {
-        const rawFileUrl = 'https://raw.githubusercontent.com/marlon-jacob/raimalakadiak-malaka/main/' + material.file.split('/').map(encodeURIComponent).join('/') + '?v=6d304654';
-        const viewUrl = /\.(pptx?|docx?|xlsx?)$/i.test(material.file)
-          ? 'https://docs.google.com/viewerng/viewer?url=' + encodeURIComponent(rawFileUrl)
-          : material.file;
-        return '<div class="empty-state">' +
-        '<h3>' + material.title + '</h3>' +
-        '<p>' + (material.description || "") + '</p>' +
-        '<div class="toolbar">' +
-        '<a class="secondary-button" href="' + viewUrl + '" target="_blank" rel="noopener">Lihat</a>' +
-        '<a class="primary-button" href="' + material.file + '" download>Unduh</a>' +
-        '</div>' +
-        '</div>';
-      }
-    )
-    .join("");
+function sppText(id, en) {
+  return currentLanguage === "en" ? en : id;
 }
 
-document
-  .querySelector("#spp1Button")
-  ?.addEventListener("click", () => renderSppMaterials("spp1"));
+function updateSppLabels() {
+  const labels = {
+    spp1Button: sppText("Materi SPP 1", "SPP 1 Materials"),
+    spp2Button: sppText("Materi SPP 2", "SPP 2 Materials"),
+    spp3Button: sppText("Materi SPP 3", "SPP 3 Materials"),
+    malakaButton: sppText("Materi Malaka", "Malaka Materials")
+  };
+  Object.entries(labels).forEach(([id, label]) => {
+    const button = document.getElementById(id);
+    if (button) button.textContent = label;
+  });
+}
 
-document
-  .querySelector("#spp2Button")
-  ?.addEventListener("click", () => renderSppMaterials("spp2"));
+async function discoverMalakaMaterials() {
+  const response = await fetch(SPP_REPOSITORY_CONTENTS_API + "/materi-malaka?ref=main", {
+    headers: { Accept: "application/vnd.github+json" }, cache: "no-store"
+  });
+  if (!response.ok) throw new Error("Materi Malaka: HTTP " + response.status);
+  const files = await response.json();
+  if (!Array.isArray(files)) throw new Error("Invalid material directory");
+  return files
+    .filter((file) => file.type === "file" && /\.(pdf|pptx?|docx?|xlsx?)$/i.test(file.name))
+    .sort((a, b) => a.name.localeCompare(b.name, "id", { numeric: true }))
+    .map((file) => ({
+      title: makeSppTitleFromFilename(file.name).replace(/\.(xlsx?)$/i, ""),
+      description: sppText("Materi pembelajaran dan pelatihan Kabupaten Malaka.", "Learning and training materials from Malaka Regency."),
+      file: "materi-malaka/" + file.name
+    }));
+}
 
-document
-  .querySelector("#spp3Button")
-  ?.addEventListener("click", () => renderSppMaterials("spp3"));
+async function renderSppMaterials(category) {
+  const list = document.querySelector("#sppMaterialList");
+  if (!list) return;
+  selectedSppCategory = category;
+  const version = ++sppRenderVersion;
+  updateSppLabels();
+  const categoryNames = {
+    spp1: sppText("Materi SPP 1", "SPP 1 Materials"),
+    spp2: sppText("Materi SPP 2", "SPP 2 Materials"),
+    spp3: sppText("Materi SPP 3", "SPP 3 Materials"),
+    malaka: sppText("Materi Malaka", "Malaka Materials")
+  };
+  ["spp1", "spp2", "spp3", "malaka"].forEach((key) => {
+    const button = document.getElementById(key + "Button");
+    if (button) button.setAttribute("aria-pressed", String(key === category));
+  });
+  let materials = [...(sppMaterials[category] || [])];
+  if (category === "spp3" || category === "malaka") {
+    list.innerHTML = '<div class="empty-state"><h3>' + escapeHtml(categoryNames[category]) + '</h3><p>' + sppText("Memuat daftar materi...", "Loading materials...") + '</p></div>';
+    try {
+      materials = category === "malaka"
+        ? await discoverMalakaMaterials()
+        : [...materials, ...(await discoverSpp3Materials(materials))];
+    } catch (error) {
+      if (version !== sppRenderVersion) return;
+      list.innerHTML = '<div class="empty-state"><h3>' + escapeHtml(categoryNames[category]) + '</h3><p>' + sppText("Daftar materi belum bisa dimuat. Periksa koneksi internet lalu coba lagi. Jika tetap gagal, buka folder materi di GitHub.", "Materials could not be loaded. Check your internet connection and retry, or open the materials folder on GitHub.") + '</p><div class="toolbar"><button class="secondary-button" id="retryMalakaButton" type="button">' + sppText("Coba lagi", "Retry") + '</button><a class="secondary-button" href="https://github.com/marlon-jacob/raimalakadiak-malaka/tree/main/materi-malaka" target="_blank" rel="noopener">' + sppText("Buka folder materi", "Open materials folder") + '</a></div></div>';
+      document.getElementById("retryMalakaButton")?.addEventListener("click", () => renderSppMaterials(category));
+      return;
+    }
+  }
+  if (version !== sppRenderVersion) return;
+  if (materials.length === 0) {
+    list.innerHTML = '<div class="empty-state"><h3>' + escapeHtml(categoryNames[category]) + '</h3><p>' + sppText("Materi untuk kategori ini belum tersedia.", "No materials are available in this category yet.") + '</p></div>';
+    return;
+  }
+  list.innerHTML = materials.map((material) => {
+    const filePath = material.file.split('/').map(encodeURIComponent).join('/');
+    const rawFileUrl = 'https://raw.githubusercontent.com/marlon-jacob/raimalakadiak-malaka/main/' + filePath;
+    const viewUrl = /\.(pptx?|docx?|xlsx?)$/i.test(material.file)
+      ? 'https://docs.google.com/viewerng/viewer?url=' + encodeURIComponent(rawFileUrl)
+      : filePath;
+    return '<div class="empty-state"><h3>' + escapeHtml(material.title) + '</h3><p>' + escapeHtml(material.description || "") + '</p><div class="toolbar">' +
+      '<a class="secondary-button" href="' + escapeHtml(viewUrl) + '" target="_blank" rel="noopener">' + sppText("Lihat", "View") + '</a>' +
+      '<a class="primary-button" href="' + escapeHtml(filePath) + '" download>' + sppText("Unduh", "Download") + '</a></div></div>';
+  }).join("");
+}
+
+["spp1", "spp2", "spp3", "malaka"].forEach((category) => {
+  document.getElementById(category + "Button")?.addEventListener("click", () => renderSppMaterials(category));
+});
+
+const applyLanguageBeforeMalaka = applyLanguage;
+applyLanguage = function applyLanguageWithMalaka(options = {}) {
+  applyLanguageBeforeMalaka(options);
+  updateSppLabels();
+  if (selectedSppCategory) renderSppMaterials(selectedSppCategory);
+};
+updateSppLabels();
 
 languageButtons.forEach((button) => {
   button.addEventListener("click", () => {
